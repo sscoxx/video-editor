@@ -93,6 +93,10 @@ const DEFAULT_NAME_PATTERN = '{video}_{idx}_{start}_{end}.mp4';
 
 const toErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
+    if (error.message.includes('called FFmpeg.terminate()')) {
+      return 'El motor ffmpeg se reinició durante la operación.';
+    }
+
     return error.message;
   }
 
@@ -1879,43 +1883,6 @@ function App() {
         </div>
       </header>
 
-      <section className="upload-strip">
-        <section
-          className={`dropzone ${isDragging ? 'dropzone--active' : ''}`}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = 'copy';
-            setIsDragging(true);
-          }}
-          onDragLeave={(event) => {
-            event.preventDefault();
-            setIsDragging(false);
-          }}
-          onDrop={handleDrop}
-        >
-          <label htmlFor="video-input" className="file-button">
-            Cargar video
-          </label>
-          <input id="video-input" type="file" accept="video/mp4,video/*" onChange={handleFileInput} />
-          <p>Arrastra un video aquí o usa el botón.</p>
-        </section>
-
-        {selectedFile && (
-          <section className="file-meta">
-            <div>
-              <strong>Archivo:</strong> {selectedFile.name}
-            </div>
-            <div>
-              <strong>Tamaño:</strong> {formatBytes(selectedFile.size)}
-            </div>
-            <div>
-              <strong>Duración:</strong>{' '}
-              {videoDurationSeconds === null ? 'Leyendo metadata...' : formatSecondsToTime(videoDurationSeconds)}
-            </div>
-          </section>
-        )}
-      </section>
-
       {warning && <div className="message message--warning">{warning}</div>}
       {error && <div className="message message--error">{error}</div>}
 
@@ -1942,7 +1909,7 @@ function App() {
             <div className="mode-switch">
               <button
                 type="button"
-                className={activeModeTab === 'simple' ? 'is-active' : ''}
+                className={`btn btn--tab ${activeModeTab === 'simple' ? 'is-active' : ''}`}
                 onClick={() => setActiveModeTab('simple')}
                 disabled={isProcessing}
               >
@@ -1950,7 +1917,7 @@ function App() {
               </button>
               <button
                 type="button"
-                className={activeModeTab === 'auto' ? 'is-active' : ''}
+                className={`btn btn--tab ${activeModeTab === 'auto' ? 'is-active' : ''}`}
                 onClick={() => setActiveModeTab('auto')}
                 disabled={isProcessing}
               >
@@ -1958,7 +1925,7 @@ function App() {
               </button>
               <button
                 type="button"
-                className={activeModeTab === 'multi' ? 'is-active' : ''}
+                className={`btn btn--tab ${activeModeTab === 'multi' ? 'is-active' : ''}`}
                 onClick={() => setActiveModeTab('multi')}
                 disabled={isProcessing}
               >
@@ -1982,7 +1949,7 @@ function App() {
                       placeholder="00:00:00 o 0.0"
                     />
 
-                    <button type="button" onClick={handlePreviewFromStart} disabled={!selectedFile || isProcessing}>
+                    <button type="button" className="btn btn--subtle" onClick={handlePreviewFromStart} disabled={!selectedFile || isProcessing}>
                       Previsualizar desde Start
                     </button>
 
@@ -1994,7 +1961,7 @@ function App() {
                       placeholder="00:00:34 o 34"
                     />
 
-                    <button type="button" onClick={handleTrim} disabled={!selectedFile || isProcessing}>
+                    <button type="button" className="btn btn--primary" onClick={handleTrim} disabled={!selectedFile || isProcessing}>
                       Recortar
                     </button>
                   </section>
@@ -2022,6 +1989,7 @@ function App() {
 
                     <button
                       type="button"
+                      className="btn btn--primary"
                       onClick={handleAutoSplit}
                       disabled={!selectedFile || isProcessing || videoDurationSeconds === null}
                     >
@@ -2050,21 +2018,24 @@ function App() {
                           }}
                         >
                           <span className="multi-cut-index">#{index + 1}</span>
-                          <input
-                            value={cut.startInput}
-                            onChange={(event) => updateMultiCutField(cut.id, 'startInput', event.target.value)}
-                            placeholder="Inicio: 00:01:20"
-                            disabled={isProcessing}
-                          />
-                          <input
-                            value={cut.endInput}
-                            onChange={(event) => updateMultiCutField(cut.id, 'endInput', event.target.value)}
-                            placeholder="Fin: 00:02:05"
-                            disabled={isProcessing}
-                          />
+                          <div className="multi-cut-fields">
+                            <input
+                              value={cut.startInput}
+                              onChange={(event) => updateMultiCutField(cut.id, 'startInput', event.target.value)}
+                              placeholder="Inicio: 00:01:20"
+                              disabled={isProcessing}
+                            />
+                            <input
+                              value={cut.endInput}
+                              onChange={(event) => updateMultiCutField(cut.id, 'endInput', event.target.value)}
+                              placeholder="Fin: 00:02:05"
+                              disabled={isProcessing}
+                            />
+                          </div>
                           <div className="multi-cut-actions">
                             <button
                               type="button"
+                              className="btn btn--subtle"
                               onClick={() => previewMultiRange(cut)}
                               disabled={!selectedFile || isProcessing}
                             >
@@ -2072,6 +2043,7 @@ function App() {
                             </button>
                             <button
                               type="button"
+                              className="btn btn--danger"
                               onClick={() => removeMultiCutRow(cut.id)}
                               disabled={isProcessing || multiCuts.length === 1}
                             >
@@ -2083,10 +2055,10 @@ function App() {
                     </div>
 
                     <div className="actions-row">
-                      <button type="button" onClick={addMultiCutRow} disabled={isProcessing}>
+                      <button type="button" className="btn btn--subtle" onClick={addMultiCutRow} disabled={isProcessing}>
                         Agregar corte
                       </button>
-                      <button type="button" onClick={handleMultiCut} disabled={!selectedFile || isProcessing}>
+                      <button type="button" className="btn btn--primary" onClick={handleMultiCut} disabled={!selectedFile || isProcessing}>
                         Generar cortes múltiples
                       </button>
                     </div>
@@ -2099,7 +2071,7 @@ function App() {
           <section className="panel">
             <h2>Historial de sesiones</h2>
             <div className="logs-toolbar">
-              <button type="button" onClick={clearHistory} disabled={history.length === 0}>
+              <button type="button" className="btn btn--subtle" onClick={clearHistory} disabled={history.length === 0}>
                 Limpiar historial
               </button>
             </div>
@@ -2118,7 +2090,7 @@ function App() {
                       <span>Tamaño total: {formatBytes(entry.totalSizeBytes)}</span>
                     </div>
                     {entry.multiCutsTemplate && entry.multiCutsTemplate.length > 0 && (
-                      <button type="button" onClick={() => restoreHistoryCuts(entry)} disabled={isProcessing}>
+                      <button type="button" className="btn btn--subtle" onClick={() => restoreHistoryCuts(entry)} disabled={isProcessing}>
                         Cargar cortes
                       </button>
                     )}
@@ -2130,8 +2102,46 @@ function App() {
         </aside>
 
         <section className="editor-stage">
-          <section className="panel">
+          <section className="panel preview-panel">
             <h2>Preview</h2>
+            <div className="preview-upload-row">
+              <section
+                className={`dropzone dropzone--inline ${isDragging ? 'dropzone--active' : ''}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'copy';
+                  setIsDragging(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  setIsDragging(false);
+                }}
+                onDrop={handleDrop}
+              >
+                <label htmlFor="video-input" className="file-button btn btn--primary">
+                  Cargar video
+                </label>
+                <input id="video-input" type="file" accept="video/mp4,video/*" onChange={handleFileInput} />
+                <p>Arrastra el video aquí o usa el botón.</p>
+              </section>
+
+              {selectedFile && (
+                <section className="file-meta file-meta--inline">
+                  <div className="file-meta-row">
+                    <strong>Archivo:</strong>
+                    <span>{selectedFile.name}</span>
+                  </div>
+                  <div className="file-meta-row">
+                    <strong>Tamaño:</strong>
+                    <span>{formatBytes(selectedFile.size)}</span>
+                  </div>
+                  <div className="file-meta-row">
+                    <strong>Duración:</strong>
+                    <span>{videoDurationSeconds === null ? 'Leyendo metadata...' : formatSecondsToTime(videoDurationSeconds)}</span>
+                  </div>
+                </section>
+              )}
+            </div>
             <video
               ref={videoRef}
               src={videoUrl || undefined}
@@ -2144,7 +2154,7 @@ function App() {
                 <span>
                   Loop activo: {formatSecondsToTime(rangeLoop.start)} - {formatSecondsToTime(rangeLoop.end)}
                 </span>
-                <button type="button" onClick={stopRangeLoopPreview} disabled={isProcessing}>
+                <button type="button" className="btn btn--subtle" onClick={stopRangeLoopPreview} disabled={isProcessing}>
                   Detener loop
                 </button>
               </div>
@@ -2163,7 +2173,7 @@ function App() {
                   <span className="timeline-selection-label">{timelineSelection.label}</span>
                   <button
                     type="button"
-                    className={markerTarget === timelineSelection.startTarget ? 'is-active' : ''}
+                    className={`btn btn--chip ${markerTarget === timelineSelection.startTarget ? 'is-active' : ''}`}
                     onClick={() => setMarkerTarget(timelineSelection.startTarget)}
                     disabled={isProcessing}
                   >
@@ -2171,7 +2181,7 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    className={markerTarget === timelineSelection.endTarget ? 'is-active' : ''}
+                    className={`btn btn--chip ${markerTarget === timelineSelection.endTarget ? 'is-active' : ''}`}
                     onClick={() => setMarkerTarget(timelineSelection.endTarget)}
                     disabled={isProcessing}
                   >
@@ -2254,13 +2264,13 @@ function App() {
 
             {(currentMode === 'auto' || currentMode === 'multi') && isProcessing && (
               <div className="actions-row">
-                <button type="button" onClick={handlePauseQueue} disabled={queuePaused || queueCancelRequested}>
+                <button type="button" className="btn btn--subtle" onClick={handlePauseQueue} disabled={queuePaused || queueCancelRequested}>
                   Pausar cola
                 </button>
-                <button type="button" onClick={handleResumeQueue} disabled={!queuePaused || queueCancelRequested}>
+                <button type="button" className="btn btn--subtle" onClick={handleResumeQueue} disabled={!queuePaused || queueCancelRequested}>
                   Reanudar cola
                 </button>
-                <button type="button" onClick={handleCancelQueue} disabled={queueCancelRequested}>
+                <button type="button" className="btn btn--danger" onClick={handleCancelQueue} disabled={queueCancelRequested}>
                   Cancelar cola
                 </button>
               </div>
@@ -2277,7 +2287,12 @@ function App() {
           ) : (
             <>
               <div className="downloads-actions">
-                <button type="button" onClick={handleDownloadAll} disabled={isProcessing || downloadableOutputs.length < 2}>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={handleDownloadAll}
+                  disabled={isProcessing || downloadableOutputs.length < 2}
+                >
                   Descargar todos (.zip)
                 </button>
               </div>
@@ -2302,7 +2317,7 @@ function App() {
                       </span>
                     </div>
                     {clip.verifiedPlayable ? (
-                      <a href={clip.url} download={clip.name}>
+                      <a className="btn btn--primary" href={clip.url} download={clip.name}>
                         Descargar
                       </a>
                     ) : (
@@ -2318,7 +2333,7 @@ function App() {
         <section className="panel">
           <h2>Logs ffmpeg</h2>
           <div className="logs-toolbar">
-            <button type="button" onClick={() => setLogs([])} disabled={logs.length === 0}>
+            <button type="button" className="btn btn--subtle" onClick={() => setLogs([])} disabled={logs.length === 0}>
               Limpiar logs
             </button>
           </div>
