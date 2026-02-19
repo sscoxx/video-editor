@@ -1,6 +1,6 @@
 # Mini Video Cutter (React + Vite + ffmpeg.wasm)
 
-Editor web local para recortar videos MP4 y auto-dividirlos en clips consecutivos, **siempre recodificando** (sin stream copy).
+Editor web local para recortar videos MP4, auto-dividirlos y generar cortes múltiples por rangos inicio/fin, **siempre recodificando** (sin stream copy).
 
 ## Stack
 
@@ -37,6 +37,9 @@ npm run preview
 ```
 
 ## Docker
+
+Para uso normal, **basta con el contenedor de producción** (`video-editor-prod`).
+El contenedor `video-editor-dev` es opcional y se usa solo para desarrollo con hot reload.
 
 ### Desarrollo (Vite + hot reload)
 
@@ -76,7 +79,8 @@ App disponible en:
 2. Definir `Start time` y `Duration`.
 3. Click en **Recortar** para generar `output.mp4`.
 4. O definir `Clip length` y usar **Auto-dividir** para generar `clip_000.mp4`, `clip_001.mp4`, etc.
-5. Descargar desde los links generados.
+5. O definir varios cortes independientes (`inicio` + `fin`) en **Cortes múltiples** para generar `part_000.mp4`, `part_001.mp4`, etc.
+6. Descargar cada clip por separado o usar **Descargar todos (.zip)**.
 
 ## Validaciones incluidas
 
@@ -90,6 +94,8 @@ Formatos de tiempo aceptados:
 
 - `HH:MM:SS`
 - `HH:MM:SS.mmm`
+- `MM:SS` / `MM:SS.mmm`
+- separador decimal con punto o coma (ej: `34.5` o `34,5`)
 - segundos con decimales (ej: `34.5`)
 
 ## Notas de rendimiento

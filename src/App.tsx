@@ -1,4 +1,5 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import JSZip from 'jszip';
 
 import { BrowserFFmpeg } from './lib/ffmpeg';
 import { clamp, formatBytes, formatSecondsToTime, parseTimeToSeconds } from './lib/time';
@@ -7,6 +8,7 @@ import './App.css';
 interface OutputClip {
   name: string;
   url: string;
+  blob: Blob;
   sizeBytes: number;
   startSeconds: number;
   durationSeconds: number;
@@ -18,7 +20,13 @@ interface AutoJob {
   durationSeconds: number;
 }
 
-type ProcessingMode = 'idle' | 'single' | 'auto';
+type ProcessingMode = 'idle' | 'single' | 'auto' | 'multi';
+
+interface MultiCutInput {
+  id: number;
+  startInput: string;
+  endInput: string;
+}
 
 interface ProgressContext {
   mode: ProcessingMode;
@@ -32,9 +40,15 @@ interface SingleCutValidation {
   notice?: string;
 }
 
+interface MultiCutValidation {
+  jobs: AutoJob[];
+  notices: string[];
+}
+
 const MAX_LOG_LINES = 250;
 const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024;
 const DURATION_EPSILON = 0.001;
+const DEFAULT_MULTI_CUT_COUNT = 3;
 
 const toErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
@@ -75,6 +89,13 @@ const buildAutoJobs = (startSeconds: number, clipLengthSeconds: number, totalDur
   return jobs;
 };
 
+const createMultiCutInputs = (count = DEFAULT_MULTI_CUT_COUNT): MultiCutInput[] =>
+  Array.from({ length: count }, (_, index) => ({
+    id: Date.now() + index + Math.round(Math.random() * 10_000),
+    startInput: '',
+    endInput: ''
+  }));
+
 function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
@@ -85,6 +106,7 @@ function App() {
 
   const [autoStartInput, setAutoStartInput] = useState('');
   const [clipLengthInput, setClipLengthInput] = useState('00:00:34');
+  const [multiCuts, setMultiCuts] = useState<MultiCutInput[]>(() => createMultiCutInputs());
 
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -206,6 +228,7 @@ function App() {
       setDurationInput('00:00:34');
       setAutoStartInput('');
       setClipLengthInput('00:00:34');
+      setMultiCuts(createMultiCutInputs());
 
       setWarning(
         file.size >= LARGE_FILE_THRESHOLD
@@ -249,6 +272,90 @@ function App() {
     if (file) {
       handleIncomingFile(file);
     }
+  };
+
+  const updateMultiCutField = (id: number, field: 'startInput' | 'endInput', value: string) => {
+    setMultiCuts((previous) => previous.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  };
+
+  const addMultiCutRow = () => {
+    setMultiCuts((previous) => [
+      ...previous,
+      {
+        id: Date.now() + Math.round(Math.random() * 10_000),
+        startInput: '',
+        endInput: ''
+      }
+    ]);
+  };
+
+  const removeMultiCutRow = (id: number) => {
+    setMultiCuts((previous) => (previous.length <= 1 ? previous : previous.filter((item) => item.id !== id)));
+  };
+
+  const validateMultiCut = (): MultiCutValidation | null => {
+    const fail = (message: string): null => {
+      setError(message);
+      appendLogLine(`[ui] ${message}`);
+      return null;
+    };
+
+    if (!selectedFile) {
+      return fail('Carga un video primero.');
+    }
+
+    if (multiCuts.length === 0) {
+      return fail('Agrega al menos un corte.');
+    }
+
+    const jobs: AutoJob[] = [];
+    const notices: string[] = [];
+
+    for (let index = 0; index < multiCuts.length; index += 1) {
+      const part = multiCuts[index];
+      const startSeconds = parseTimeToSeconds(part.startInput);
+      const endSecondsRaw = parseTimeToSeconds(part.endInput);
+
+      if (startSeconds === null) {
+        return fail(
+          `Corte ${index + 1}: inicio inválido. Usa HH:MM:SS(.mmm), MM:SS(.mmm) o segundos con decimales.`
+        );
+      }
+
+      if (endSecondsRaw === null) {
+        return fail(`Corte ${index + 1}: fin inválido. Usa HH:MM:SS(.mmm), MM:SS(.mmm) o segundos con decimales.`);
+      }
+
+      if (startSeconds < 0) {
+        return fail(`Corte ${index + 1}: el inicio debe ser mayor o igual que 0.`);
+      }
+
+      let effectiveEnd = endSecondsRaw;
+
+      if (videoDurationSeconds !== null) {
+        if (startSeconds >= videoDurationSeconds) {
+          return fail(`Corte ${index + 1}: el inicio está fuera de la duración del video.`);
+        }
+
+        if (endSecondsRaw > videoDurationSeconds + DURATION_EPSILON) {
+          effectiveEnd = videoDurationSeconds;
+          const notice = `Corte ${index + 1}: fin ajustado a ${formatSecondsToTime(videoDurationSeconds)} para no exceder el video.`;
+          notices.push(notice);
+        }
+      }
+
+      if (effectiveEnd <= startSeconds + DURATION_EPSILON) {
+        return fail(`Corte ${index + 1}: el fin debe ser mayor que el inicio.`);
+      }
+
+      jobs.push({
+        outputPath: `part_${String(index).padStart(3, '0')}.mp4`,
+        startSeconds,
+        durationSeconds: effectiveEnd - startSeconds
+      });
+    }
+
+    return { jobs, notices };
   };
 
   const validateSingleCut = (): SingleCutValidation | null => {
@@ -446,11 +553,13 @@ function App() {
         durationSeconds: valid.durationSeconds
       });
 
-      const outputUrl = URL.createObjectURL(new Blob([toArrayBuffer(outputBytes)], { type: 'video/mp4' }));
+      const outputBlob = new Blob([toArrayBuffer(outputBytes)], { type: 'video/mp4' });
+      const outputUrl = URL.createObjectURL(outputBlob);
 
       appendOutput({
         name: outputName,
         url: outputUrl,
+        blob: outputBlob,
         sizeBytes: outputBytes.byteLength,
         startSeconds: valid.startSeconds,
         durationSeconds: valid.durationSeconds
@@ -519,11 +628,13 @@ function App() {
           durationSeconds: job.durationSeconds
         });
 
-        const outputUrl = URL.createObjectURL(new Blob([toArrayBuffer(outputBytes)], { type: 'video/mp4' }));
+        const outputBlob = new Blob([toArrayBuffer(outputBytes)], { type: 'video/mp4' });
+        const outputUrl = URL.createObjectURL(outputBlob);
 
         appendOutput({
           name: job.outputPath,
           url: outputUrl,
+          blob: outputBlob,
           sizeBytes: outputBytes.byteLength,
           startSeconds: job.startSeconds,
           durationSeconds: job.durationSeconds
@@ -544,6 +655,144 @@ function App() {
       }
 
       progressContextRef.current.mode = 'idle';
+      setIsProcessing(false);
+    }
+  };
+
+  const handleMultiCut = async () => {
+    const valid = validateMultiCut();
+
+    if (!valid) {
+      return;
+    }
+
+    const processor = ffmpegRef.current;
+
+    if (!processor || !selectedFile) {
+      setError('No se pudo iniciar ffmpeg.');
+      return;
+    }
+
+    clearRunState();
+    replaceOutputs([]);
+    setIsProcessing(true);
+
+    if (valid.notices.length > 0) {
+      setWarning(valid.notices.join(' '));
+      valid.notices.forEach((notice) => appendLogLine(`[ui] ${notice}`));
+    }
+
+    progressContextRef.current = {
+      mode: 'multi',
+      clipIndex: 0,
+      totalClips: valid.jobs.length
+    };
+
+    let inputPath: string | null = null;
+
+    try {
+      const loaded = await loadCore();
+
+      if (!loaded) {
+        return;
+      }
+
+      inputPath = await processor.writeInputFile(selectedFile);
+
+      for (let index = 0; index < valid.jobs.length; index += 1) {
+        const job = valid.jobs[index];
+        progressContextRef.current.clipIndex = index;
+
+        setStatus(`Recodificando corte ${index + 1} de ${valid.jobs.length}...`);
+        appendLogLine(
+          `[ui] Corte ${index + 1}: inicio=${formatSecondsToTime(job.startSeconds, true)} fin=${formatSecondsToTime(
+            job.startSeconds + job.durationSeconds,
+            true
+          )}`
+        );
+
+        const outputBytes = await processor.transcodeClip({
+          inputPath,
+          outputPath: job.outputPath,
+          startSeconds: job.startSeconds,
+          durationSeconds: job.durationSeconds
+        });
+
+        const outputBlob = new Blob([toArrayBuffer(outputBytes)], { type: 'video/mp4' });
+        const outputUrl = URL.createObjectURL(outputBlob);
+
+        appendOutput({
+          name: job.outputPath,
+          url: outputUrl,
+          blob: outputBlob,
+          sizeBytes: outputBytes.byteLength,
+          startSeconds: job.startSeconds,
+          durationSeconds: job.durationSeconds
+        });
+      }
+
+      setProgress(100);
+      setStatus(`Cortes múltiples completados. ${valid.jobs.length} clips generados.`);
+    } catch (multiError) {
+      const partial = outputsRef.current.length;
+      const partialMessage = partial > 0 ? ` Se generaron ${partial} clips antes del error.` : '';
+
+      setError(`${toErrorMessage(multiError)}${partialMessage}`);
+      setStatus('Cortes múltiples interrumpidos.');
+    } finally {
+      if (inputPath) {
+        await processor.deleteFile(inputPath);
+      }
+
+      progressContextRef.current.mode = 'idle';
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDownloadAll = async () => {
+    if (outputsRef.current.length === 0) {
+      return;
+    }
+
+    setError(null);
+    setIsProcessing(true);
+    setProgress(0);
+    setStatus('Empaquetando clips para descarga...');
+
+    try {
+      const zip = new JSZip();
+
+      outputsRef.current.forEach((clip) => {
+        zip.file(clip.name, clip.blob);
+      });
+
+      const zipBlob = await zip.generateAsync(
+        {
+          type: 'blob',
+          compression: 'DEFLATE',
+          compressionOptions: { level: 6 }
+        },
+        (metadata) => {
+          setProgress(clamp(metadata.percent, 0, 100));
+        }
+      );
+
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = 'clips.zip';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      setProgress(100);
+      setStatus('ZIP generado. Descarga iniciada.');
+      appendLogLine(`[ui] ZIP generado con ${outputsRef.current.length} clips.`);
+    } catch (zipError) {
+      setError(`No se pudo empaquetar los clips: ${toErrorMessage(zipError)}`);
+      setStatus('Error al generar ZIP.');
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -725,6 +974,47 @@ function App() {
         </button>
       </section>
 
+      <section className="panel">
+        <h2>Cortes múltiples (inicio y fin)</h2>
+        <p className="status-text">Define cada corte con tiempos independientes de inicio y fin.</p>
+
+        <div className="multi-cut-list">
+          {multiCuts.map((part, index) => (
+            <div className="multi-cut-row" key={part.id}>
+              <span className="multi-cut-index">#{index + 1}</span>
+              <input
+                value={part.startInput}
+                onChange={(event) => updateMultiCutField(part.id, 'startInput', event.target.value)}
+                placeholder="Inicio: 00:01:20"
+                disabled={isProcessing}
+              />
+              <input
+                value={part.endInput}
+                onChange={(event) => updateMultiCutField(part.id, 'endInput', event.target.value)}
+                placeholder="Fin: 00:02:05"
+                disabled={isProcessing}
+              />
+              <button
+                type="button"
+                onClick={() => removeMultiCutRow(part.id)}
+                disabled={isProcessing || multiCuts.length === 1}
+              >
+                Quitar
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="actions-row">
+          <button type="button" onClick={addMultiCutRow} disabled={isProcessing}>
+            Agregar corte
+          </button>
+          <button type="button" onClick={handleMultiCut} disabled={!selectedFile || isProcessing}>
+            Generar cortes múltiples
+          </button>
+        </div>
+      </section>
+
       <section className="panel actions-row">
         <button type="button" onClick={handleLoadCore} disabled={isProcessing || isCoreLoaded}>
           {isCoreLoaded ? 'Motor ffmpeg listo' : 'Cargar motor ffmpeg'}
@@ -745,22 +1035,30 @@ function App() {
         {outputs.length === 0 ? (
           <p>Aún no hay archivos generados.</p>
         ) : (
-          <ul className="download-list">
-            {outputs.map((clip) => (
-              <li key={`${clip.name}-${clip.startSeconds}-${clip.durationSeconds}`}>
-                <div>
-                  <strong>{clip.name}</strong>
-                  <span>
-                    {formatSecondsToTime(clip.startSeconds)} - {formatSecondsToTime(clip.startSeconds + clip.durationSeconds)}
-                  </span>
-                  <span>{formatBytes(clip.sizeBytes)}</span>
-                </div>
-                <a href={clip.url} download={clip.name}>
-                  Descargar
-                </a>
-              </li>
-            ))}
-          </ul>
+          <>
+            <div className="downloads-actions">
+              <button type="button" onClick={handleDownloadAll} disabled={isProcessing || outputs.length < 2}>
+                Descargar todos (.zip)
+              </button>
+            </div>
+            <ul className="download-list">
+              {outputs.map((clip) => (
+                <li key={`${clip.name}-${clip.startSeconds}-${clip.durationSeconds}`}>
+                  <div>
+                    <strong>{clip.name}</strong>
+                    <span>
+                      {formatSecondsToTime(clip.startSeconds)} -{' '}
+                      {formatSecondsToTime(clip.startSeconds + clip.durationSeconds)}
+                    </span>
+                    <span>{formatBytes(clip.sizeBytes)}</span>
+                  </div>
+                  <a href={clip.url} download={clip.name}>
+                    Descargar
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
 
