@@ -1,0 +1,202 @@
+.app-shell {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 2.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.app-header {
+  background: #ffffffcc;
+  border: 1px solid #cde6dc;
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+.app-header h1 {
+  margin: 0 0 0.25rem;
+  letter-spacing: 0.02em;
+}
+
+.app-header p {
+  margin: 0;
+  color: #36514a;
+}
+
+.dropzone {
+  border: 2px dashed #47987a;
+  border-radius: 16px;
+  padding: 1rem;
+  background: #ffffffbb;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.dropzone--active {
+  background: #d9ffe5;
+  transform: translateY(-2px);
+}
+
+.dropzone input[type='file'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.file-button,
+button,
+.download-list a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid #157a58;
+  background: #1a9268;
+  color: #fff;
+  font-weight: 600;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.panel,
+.file-meta {
+  min-width: 0;
+  background: #ffffffd8;
+  border: 1px solid #cde6dc;
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+.file-meta {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.video-preview {
+  width: 100%;
+  border-radius: 12px;
+  background: #000;
+  max-height: 420px;
+}
+
+.controls-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.controls-grid input {
+  border: 1px solid #8ab6a7;
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+}
+
+.actions-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.progress-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+progress {
+  width: 100%;
+  height: 14px;
+}
+
+.status-text {
+  margin-top: 0.6rem;
+  color: #27463e;
+}
+
+.message {
+  border-radius: 12px;
+  padding: 0.7rem 0.8rem;
+  font-weight: 500;
+}
+
+.message--warning {
+  background: #fff2c6;
+  border: 1px solid #d7b13a;
+  color: #5e4511;
+}
+
+.message--error {
+  background: #ffd9d4;
+  border: 1px solid #b9332a;
+  color: #6d150f;
+}
+
+.download-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.download-list li {
+  border: 1px solid #d6e7e0;
+  border-radius: 12px;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.download-list li div {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.logs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.logs-box {
+  margin: 0;
+  min-height: 160px;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border: 1px solid #cfe4dc;
+  border-radius: 10px;
+  background: #08100e;
+  color: #a4f6d1;
+  padding: 0.75rem;
+  font-family: 'IBM Plex Mono', 'Consolas', monospace;
+  font-size: 0.8rem;
+}
+
+@media (min-width: 760px) {
+  .controls-grid {
+    grid-template-columns: 180px 1fr;
+    align-items: center;
+  }
+
+  .controls-grid h2,
+  .controls-grid > button,
+  .controls-grid > input[type='range'] {
+    grid-column: 1 / -1;
+  }
+
+  .download-list li {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+  }
+}
