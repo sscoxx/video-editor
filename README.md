@@ -6,6 +6,7 @@ Editor web local para recortar videos MP4, auto-dividirlos y generar cortes múl
 
 - Vite + React + TypeScript
 - `@ffmpeg/ffmpeg` + `@ffmpeg/util`
+- `JSZip` para descarga masiva en `.zip`
 - Core local de ffmpeg servido desde `public/ffmpeg`
 
 ## Reglas de codificación aplicadas
@@ -76,11 +77,31 @@ App disponible en:
 ## Flujo de uso
 
 1. Cargar video por botón o drag & drop.
-2. Definir `Start time` y `Duration`.
-3. Click en **Recortar** para generar `output.mp4`.
-4. O definir `Clip length` y usar **Auto-dividir** para generar `clip_000.mp4`, `clip_001.mp4`, etc.
-5. O definir varios cortes independientes (`inicio` + `fin`) en **Cortes múltiples** para generar `part_000.mp4`, `part_001.mp4`, etc.
-6. Descargar cada clip por separado o usar **Descargar todos (.zip)**.
+2. Definir patrón de nombre con variables: `{video}`, `{idx}`, `{start}`, `{end}`, `{duration}`.
+3. Usar el **timeline visual con handles** para ajustar inicio/fin del corte activo arrastrando.
+4. Ajustar tiempos con botones de **snapping** (`+/-1s`, `+/-100ms`) o atajos `I` (inicio) / `O` (fin).
+5. Definir `Start time` y `Duration` para recorte simple.
+6. O definir `Clip length` y usar **Auto-dividir**.
+7. O definir varios cortes independientes (`inicio` + `fin`) en **Cortes múltiples**.
+8. Reordenar cortes múltiples con **drag & drop**.
+9. Lanzar proceso y, en colas largas (auto/multi), usar **Pausar / Reanudar / Cancelar**.
+10. Descargar clips individuales o **Descargar todos (.zip)**.
+
+## Funciones avanzadas
+
+- Timeline visual con handles (inicio/fin) y foco dinámico según el corte seleccionado.
+- Snapping temporal fino y atajos de teclado (`I`/`O`).
+- Inicialización automática del motor ffmpeg al cargar video (sin botón manual).
+- Reordenamiento de cortes múltiples por drag & drop.
+- Cola de trabajos con pausa/reanudar/cancelar.
+- ETA estimada y métricas de ejecución en tiempo real.
+- Métricas por salida antes de descargar:
+  - tamaño
+  - duración solicitada
+  - duración real detectada
+- Verificación de integridad por clip (reproducible/no reproducible) antes de habilitar descarga.
+- Previsualización en loop del rango de cada corte.
+- Historial local de sesiones con recuperación de plantillas de cortes múltiples.
 
 ## Validaciones incluidas
 
@@ -102,6 +123,7 @@ Formatos de tiempo aceptados:
 
 - Todo corre en navegador (sin backend).
 - Archivos grandes pueden tardar y consumir mucha RAM.
+- La pausa/reanudación aplica entre jobs de cola; la cancelación intenta interrumpir el job actual reiniciando el worker.
 - Se limpian recursos:
   - `URL.revokeObjectURL` para previews/salidas
   - borrado de archivos temporales del FS virtual de ffmpeg
