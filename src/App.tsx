@@ -18,11 +18,21 @@ interface OutputClip {
   verificationError?: string;
 }
 
+interface OutputImage {
+  id: string;
+  name: string;
+  sourceName: string;
+  url: string;
+  blob: Blob;
+  sizeBytes: number;
+}
+
 interface ClipJob {
   outputName: string;
   startSeconds: number;
   durationSeconds: number;
   label: string;
+  videoFilter?: string;
 }
 
 interface MultiCutInput {
@@ -31,10 +41,10 @@ interface MultiCutInput {
   endInput: string;
 }
 
-type ProcessingMode = 'idle' | 'single' | 'auto' | 'multi';
+type ProcessingMode = 'idle' | 'single' | 'auto' | 'multi' | 'instagram' | 'images';
 
 type MarkerTarget = 'single-start' | 'single-end' | 'multi-start' | 'multi-end';
-const MODE_TABS = ['simple', 'auto', 'multi'] as const;
+const MODE_TABS = ['simple', 'auto', 'multi', 'instagram', 'images'] as const;
 type ModeTab = (typeof MODE_TABS)[number];
 
 interface TimelineSelection {
@@ -90,14 +100,41 @@ const DEFAULT_MULTI_CUT_COUNT = 2;
 const HISTORY_KEY = 'mini_video_cutter_history_v1';
 const HISTORY_LIMIT = 20;
 const DEFAULT_NAME_PATTERN = '{video}_{idx}_{start}_{end}.mp4';
+const INSTAGRAM_4X5_FILTER =
+  'scale=1080:1350:force_original_aspect_ratio=decrease,pad=1080:1350:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1';
 
 const toErrorMessage = (error: unknown): string => {
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+
   if (error instanceof Error) {
     if (error.message.includes('called FFmpeg.terminate()')) {
       return 'El motor ffmpeg se reinició durante la operación.';
     }
 
     return error.message;
+  }
+
+  if (typeof error === 'number' || typeof error === 'boolean' || typeof error === 'bigint') {
+    return String(error);
+  }
+
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+
+    if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+      return maybeMessage;
+    }
+
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== '{}') {
+        return serialized;
+      }
+    } catch {
+      // Ignorar errores de serialización.
+    }
   }
 
   return 'Se produjo un error inesperado.';
@@ -109,8 +146,78 @@ const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   return buffer;
 };
 
+const blobToUint8Array = async (blob: Blob): Promise<Uint8Array> => {
+  const buffer = await blob.arrayBuffer();
+  return new Uint8Array(buffer);
+};
+
+const loadImageElementFromFile = async (file: File): Promise<HTMLImageElement> => {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('No se pudo leer la imagen seleccionada.'));
+    };
+
+    image.src = objectUrl;
+  });
+};
+
+const convertImageToInstagramJpegBytes = async (file: File): Promise<Uint8Array> => {
+  const image = await loadImageElementFromFile(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1350;
+
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('No se pudo inicializar el render de imagen en el navegador.');
+  }
+
+  context.fillStyle = '#000000';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const safeWidth = Math.max(image.naturalWidth || image.width, 1);
+  const safeHeight = Math.max(image.naturalHeight || image.height, 1);
+  const scale = Math.max(canvas.width / safeWidth, canvas.height / safeHeight);
+  const drawWidth = safeWidth * scale;
+  const drawHeight = safeHeight * scale;
+  const drawX = (canvas.width - drawWidth) / 2;
+  const drawY = (canvas.height - drawHeight) / 2;
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, 'image/jpeg', 0.92);
+  });
+
+  if (!blob) {
+    throw new Error('No se pudo exportar la imagen convertida.');
+  }
+
+  return blobToUint8Array(blob);
+};
+
 const isVideoFile = (file: File): boolean => {
   return file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4');
+};
+
+const isSupportedImageFile = (file: File): boolean => {
+  if (file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/webp') {
+    return true;
+  }
+
+  return /\.(jpe?g|png|webp)$/i.test(file.name);
 };
 
 const createId = (): string => {
@@ -176,12 +283,60 @@ const buildOutputName = (
   return normalized.toLowerCase().endsWith('.mp4') ? normalized : `${normalized}.mp4`;
 };
 
+const buildInstagramOutputName = (sourceName: string): string => {
+  const base = sanitizeFileName(baseNameFromFile(sourceName));
+  const safeBase = base || 'video';
+  return `${safeBase}_ig_4x5.mp4`;
+};
+
+const buildImageBatchOutputName = (sourceName: string, duplicateIndex = 0): string => {
+  const base = sanitizeFileName(baseNameFromFile(sourceName));
+  const safeBase = base || 'image';
+  const suffix = duplicateIndex > 0 ? `_${String(duplicateIndex + 1).padStart(2, '0')}` : '';
+  return `${safeBase}${suffix}.jpg`;
+};
+
+const normalizeVideoOutputName = (value: string, fallback: string): string => {
+  const trimmed = value.trim();
+  const cleaned = trimmed ? sanitizeFileName(trimmed) : '';
+  const safeValue = cleaned || fallback;
+  return safeValue.toLowerCase().endsWith('.mp4') ? safeValue : `${safeValue}.mp4`;
+};
+
 const formatEta = (seconds: number | null): string => {
   if (seconds === null || !Number.isFinite(seconds) || seconds < 0) {
     return '-';
   }
 
   return formatSecondsToTime(seconds, false);
+};
+
+const isSingleClipMode = (mode: ProcessingMode): boolean => {
+  return mode === 'single' || mode === 'instagram';
+};
+
+const modeLabel = (mode: ProcessingMode): string => {
+  if (mode === 'single') {
+    return 'Simple';
+  }
+
+  if (mode === 'auto') {
+    return 'Auto-dividir';
+  }
+
+  if (mode === 'multi') {
+    return 'Múltiple';
+  }
+
+  if (mode === 'instagram') {
+    return 'Instagram 4:5';
+  }
+
+  if (mode === 'images') {
+    return 'Imágenes 4:5';
+  }
+
+  return '-';
 };
 
 const markerTargetLabel = (target: MarkerTarget): string => {
@@ -239,6 +394,8 @@ function App() {
   const [clipLengthInput, setClipLengthInput] = useState('00:00:34');
 
   const [outputNamePattern, setOutputNamePattern] = useState(DEFAULT_NAME_PATTERN);
+  const [instagramOutputName, setInstagramOutputName] = useState('video_ig_4x5.mp4');
+  const [imageBatchFiles, setImageBatchFiles] = useState<File[]>([]);
   const [multiCuts, setMultiCuts] = useState<MultiCutInput[]>(() => createMultiCutInputs());
   const [activeMultiCutId, setActiveMultiCutId] = useState<number | null>(null);
   const [draggingCutId, setDraggingCutId] = useState<number | null>(null);
@@ -259,6 +416,7 @@ function App() {
   const [warning, setWarning] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [outputs, setOutputs] = useState<OutputClip[]>([]);
+  const [imageOutputs, setImageOutputs] = useState<OutputImage[]>([]);
   const [history, setHistory] = useState<SessionHistoryEntry[]>([]);
 
   const [currentMode, setCurrentMode] = useState<ProcessingMode>('idle');
@@ -276,6 +434,7 @@ function App() {
   const coreLoadPromiseRef = useRef<Promise<boolean> | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const outputsRef = useRef<OutputClip[]>([]);
+  const imageOutputsRef = useRef<OutputImage[]>([]);
 
   const progressContextRef = useRef<ProgressContext>({
     mode: 'idle',
@@ -307,6 +466,18 @@ function App() {
     const nextOutputs = [...outputsRef.current, clip];
     outputsRef.current = nextOutputs;
     setOutputs(nextOutputs);
+  }, []);
+
+  const replaceImageOutputs = useCallback((nextOutputs: OutputImage[]) => {
+    imageOutputsRef.current.forEach((item) => URL.revokeObjectURL(item.url));
+    imageOutputsRef.current = nextOutputs;
+    setImageOutputs(nextOutputs);
+  }, []);
+
+  const appendImageOutput = useCallback((output: OutputImage) => {
+    const nextOutputs = [...imageOutputsRef.current, output];
+    imageOutputsRef.current = nextOutputs;
+    setImageOutputs(nextOutputs);
   }, []);
 
   const setPreviewSource = useCallback((nextUrl: string | null) => {
@@ -666,7 +837,7 @@ function App() {
     const clipElapsed = timingRef.current.clipStartedAt > 0 ? (now - timingRef.current.clipStartedAt) / 1000 : 0;
     setCurrentClipElapsedSeconds(clipElapsed);
 
-    if (mode === 'single') {
+    if (isSingleClipMode(mode)) {
       if (progressValue > 0.01) {
         const remaining = clipElapsed * ((1 - progressValue) / progressValue);
         setEtaSeconds(Math.max(remaining, 0));
@@ -709,9 +880,9 @@ function App() {
 
         const normalizedProgress = clamp(event.progress, 0, 1);
 
-        if (context.mode === 'single') {
+        if (isSingleClipMode(context.mode)) {
           setProgress(normalizedProgress * 100);
-          updateEtaFromProgress('single', normalizedProgress);
+          updateEtaFromProgress(context.mode, normalizedProgress);
           return;
         }
 
@@ -855,6 +1026,7 @@ function App() {
       }
 
       outputsRef.current.forEach((item) => URL.revokeObjectURL(item.url));
+      imageOutputsRef.current.forEach((item) => URL.revokeObjectURL(item.url));
     };
   }, []);
 
@@ -990,6 +1162,7 @@ function App() {
       }
 
       clearRunState();
+      setWarning(null);
       replaceOutputs([]);
 
       const nextCuts = createMultiCutInputs();
@@ -1001,6 +1174,7 @@ function App() {
       setDurationInput('00:00:34');
       setAutoStartInput('');
       setClipLengthInput('00:00:34');
+      setInstagramOutputName(buildInstagramOutputName(file.name));
       setMultiCuts(nextCuts);
       setActiveMultiCutId(nextCuts[0]?.id ?? null);
       setTimelineCursorSeconds(0);
@@ -1026,6 +1200,28 @@ function App() {
     if (file) {
       handleIncomingFile(file);
     }
+
+    event.target.value = '';
+  };
+
+  const handleImageBatchInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const incoming = Array.from(event.target.files ?? []);
+    const accepted = incoming.filter((file) => isSupportedImageFile(file));
+    const ignored = incoming.length - accepted.length;
+
+    if (accepted.length === 0) {
+      if (incoming.length > 0) {
+        setError('No hay imágenes válidas. Formatos soportados: JPG, JPEG, PNG, WEBP.');
+      }
+      event.target.value = '';
+      return;
+    }
+
+    setError(null);
+    setImageBatchFiles(accepted);
+    replaceImageOutputs([]);
+    setWarning(ignored > 0 ? `Se omitieron ${ignored} archivo(s) no compatibles.` : null);
+    void ensureCoreReady();
 
     event.target.value = '';
   };
@@ -1512,6 +1708,39 @@ function App() {
     return { jobs, notices };
   };
 
+  const validateInstagramFormat = (): JobValidation | null => {
+    const fail = (message: string): null => {
+      setError(message);
+      appendLogLine(`[ui] ${message}`);
+      return null;
+    };
+
+    if (!selectedFile) {
+      return fail('Carga un video primero.');
+    }
+
+    const fallbackName = buildInstagramOutputName(selectedFile.name);
+    const outputName = normalizeVideoOutputName(instagramOutputName, fallbackName);
+    const notices: string[] = [];
+
+    if (videoDurationSeconds === null || videoDurationSeconds <= 0) {
+      notices.push('No hay metadata de duración; se procesará el archivo completo.');
+    }
+
+    return {
+      notices,
+      jobs: [
+        {
+          outputName,
+          startSeconds: 0,
+          durationSeconds: videoDurationSeconds ?? 0,
+          label: 'Instagram 4:5',
+          videoFilter: INSTAGRAM_4X5_FILTER
+        }
+      ]
+    };
+  };
+
   const waitForQueueGate = useCallback(async () => {
     while (queueControlRef.current.paused && !queueControlRef.current.cancelled) {
       await delay(120);
@@ -1590,11 +1819,13 @@ function App() {
           setCurrentClipTotal(jobs.length);
           setStatus(`Recodificando ${job.label} (${index + 1}/${jobs.length})...`);
 
+          const endLabel =
+            job.durationSeconds > 0
+              ? formatSecondsToTime(job.startSeconds + job.durationSeconds, true)
+              : 'fin del archivo';
+
           appendLogLine(
-            `[ui] ${job.label}: start=${formatSecondsToTime(job.startSeconds, true)} end=${formatSecondsToTime(
-              job.startSeconds + job.durationSeconds,
-              true
-            )} salida=${job.outputName}`
+            `[ui] ${job.label}: start=${formatSecondsToTime(job.startSeconds, true)} end=${endLabel} salida=${job.outputName}`
           );
 
           timingRef.current.clipStartedAt = Date.now();
@@ -1603,7 +1834,8 @@ function App() {
             inputPath,
             outputPath: job.outputName,
             startSeconds: job.startSeconds,
-            durationSeconds: job.durationSeconds
+            durationSeconds: job.durationSeconds,
+            videoFilter: job.videoFilter
           });
 
           const clipElapsed = (Date.now() - timingRef.current.clipStartedAt) / 1000;
@@ -1620,7 +1852,8 @@ function App() {
             blob: outputBlob,
             sizeBytes: outputBytes.byteLength,
             startSeconds: job.startSeconds,
-            durationSeconds: job.durationSeconds,
+            durationSeconds:
+              job.durationSeconds > 0 ? job.durationSeconds : Math.max(verification.durationSeconds ?? 0, DURATION_EPSILON),
             actualDurationSeconds: verification.durationSeconds,
             verifiedPlayable: verification.playable,
             verificationError: verification.errorMessage
@@ -1711,6 +1944,137 @@ function App() {
     });
   };
 
+  const handleInstagramFormat = async () => {
+    const validation = validateInstagramFormat();
+
+    if (!validation) {
+      return;
+    }
+
+    await processJobs('instagram', validation);
+  };
+
+  const handleConvertImageBatch = async () => {
+    if (imageBatchFiles.length === 0) {
+      setError('Selecciona al menos una imagen para procesar.');
+      return;
+    }
+
+    clearRunState();
+    const compatibilityNotice = 'Modo compatibilidad (canvas) activo para conversion de imagenes.';
+    setWarning(compatibilityNotice);
+    replaceImageOutputs([]);
+    setIsProcessing(true);
+    setCurrentMode('images');
+
+    queueControlRef.current = { paused: false, cancelled: false };
+    setQueuePaused(false);
+    setQueueCancelRequested(false);
+
+    const total = imageBatchFiles.length;
+    progressContextRef.current = {
+      mode: 'images',
+      clipIndex: 0,
+      totalClips: total
+    };
+    setCurrentClipNumber(1);
+    setCurrentClipTotal(total);
+
+    timingRef.current = {
+      runStartedAt: Date.now(),
+      clipStartedAt: 0,
+      completedClipSeconds: []
+    };
+
+    const generated: OutputImage[] = [];
+    const duplicateNames = new Map<string, number>();
+    let failedCount = 0;
+    let firstFailureMessage: string | null = null;
+
+    try {
+      appendLogLine('[ui] Lote de imagenes: usando conversion por canvas (1080x1350, crop centrado).');
+
+      for (let index = 0; index < total; index += 1) {
+        await waitForQueueGate();
+
+        const sourceFile = imageBatchFiles[index];
+        progressContextRef.current.clipIndex = index;
+        setCurrentClipNumber(index + 1);
+        setCurrentClipTotal(total);
+        setProgress((index / total) * 100);
+        setStatus(`Convirtiendo imagen ${index + 1}/${total}...`);
+
+        const baseKey = sanitizeFileName(baseNameFromFile(sourceFile.name)).toLowerCase();
+        const duplicateIndex = duplicateNames.get(baseKey) ?? 0;
+        duplicateNames.set(baseKey, duplicateIndex + 1);
+        const outputName = buildImageBatchOutputName(sourceFile.name, duplicateIndex);
+
+        appendLogLine(`[ui] Imagen ${index + 1}: ${sourceFile.name} -> ${outputName}`);
+        timingRef.current.clipStartedAt = Date.now();
+
+        try {
+          const outputBytes = await convertImageToInstagramJpegBytes(sourceFile);
+
+          const clipElapsed = (Date.now() - timingRef.current.clipStartedAt) / 1000;
+          timingRef.current.completedClipSeconds.push(clipElapsed);
+
+          const outputBlob = new Blob([toArrayBuffer(outputBytes)], { type: 'image/jpeg' });
+          const outputUrl = URL.createObjectURL(outputBlob);
+          const output: OutputImage = {
+            id: createId(),
+            name: outputName,
+            sourceName: sourceFile.name,
+            url: outputUrl,
+            blob: outputBlob,
+            sizeBytes: outputBytes.byteLength
+          };
+
+          generated.push(output);
+          appendImageOutput(output);
+        } catch (itemError) {
+          failedCount += 1;
+          const itemMessage = toErrorMessage(itemError);
+          firstFailureMessage ??= itemMessage;
+          appendLogLine(`[ui] Error en ${sourceFile.name}: ${itemMessage}`);
+        } finally {
+          setProgress(((index + 1) / total) * 100);
+        }
+      }
+
+      if (generated.length === 0) {
+        throw new Error(firstFailureMessage ?? 'No se pudo generar ninguna imagen del lote.');
+      }
+
+      setEtaSeconds(0);
+      if (failedCount > 0) {
+        const summary = `Se generaron ${generated.length} imágenes y fallaron ${failedCount}.`;
+        setWarning(`${compatibilityNotice} ${summary}`);
+      } else {
+        setWarning(compatibilityNotice);
+      }
+      setStatus(
+        failedCount > 0
+          ? `Lote completado con errores. Generadas: ${generated.length}. Fallidas: ${failedCount}.`
+          : `Lote completado. ${generated.length} imagen(es) generada(s).`
+      );
+    } catch (processingError) {
+      const message = toErrorMessage(processingError);
+      const partial = generated.length;
+      const partialMessage = partial > 0 ? ` Se generaron ${partial} imágenes antes del error.` : '';
+      setError(`${message}${partialMessage}`);
+      setStatus('Proceso de imágenes interrumpido.');
+    } finally {
+      progressContextRef.current.mode = 'idle';
+      setCurrentMode('idle');
+      setCurrentClipNumber(0);
+      setCurrentClipTotal(0);
+      setIsProcessing(false);
+      queueControlRef.current = { paused: false, cancelled: false };
+      setQueuePaused(false);
+      setQueueCancelRequested(false);
+    }
+  };
+
   const handlePauseQueue = () => {
     if (!isProcessing) {
       return;
@@ -1797,6 +2161,55 @@ function App() {
     }
   };
 
+  const handleDownloadAllImages = async () => {
+    if (imageOutputs.length === 0) {
+      setError('No hay imágenes generadas para descargar.');
+      return;
+    }
+
+    setError(null);
+    setIsProcessing(true);
+    setProgress(0);
+    setStatus('Empaquetando imágenes para descarga...');
+
+    try {
+      const zip = new JSZip();
+
+      imageOutputs.forEach((image) => {
+        zip.file(image.name, image.blob);
+      });
+
+      const zipBlob = await zip.generateAsync(
+        {
+          type: 'blob',
+          compression: 'DEFLATE',
+          compressionOptions: { level: 6 }
+        },
+        (metadata) => {
+          setProgress(clamp(metadata.percent, 0, 100));
+        }
+      );
+
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = `imagenes_ig_4x5_${imageOutputs.length}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      setProgress(100);
+      setStatus('ZIP de imágenes generado. Descarga iniciada.');
+      appendLogLine(`[ui] ZIP de imágenes generado con ${imageOutputs.length} archivo(s).`);
+    } catch (zipError) {
+      setError(`No se pudo empaquetar las imágenes: ${toErrorMessage(zipError)}`);
+      setStatus('Error al generar ZIP de imágenes.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handlePreviewFromStart = async () => {
     const player = videoRef.current;
 
@@ -1872,9 +2285,19 @@ function App() {
   return (
     <main className="editor-root">
       <header className="editor-topbar">
-        <div>
-          <h1>Mini Cutter Studio</h1>
-          <p>Interfaz estilo editor para recorte con ffmpeg.wasm (recodificación obligatoria).</p>
+        <div className="editor-topbar-content">
+          <p className="editor-eyebrow">Media Workflow</p>
+          <h1>
+            FormatFlow <span>Studio</span>
+          </h1>
+          <p className="editor-topbar-subtitle">
+            Recorte de video, formato 4:5 para Instagram y conversion de imagenes por lote con ffmpeg.wasm.
+          </p>
+          <div className="editor-topbar-metrics">
+            <span className="topbar-chip">{selectedFile ? 'Video cargado' : 'Sin video'}</span>
+            <span className="topbar-chip">Videos: {outputs.length}</span>
+            <span className="topbar-chip">Imagenes: {imageOutputs.length}</span>
+          </div>
         </div>
         <div className="editor-topbar-actions">
           <span className={`engine-state ${isCoreLoaded ? 'engine-state--ready' : ''}`}>
@@ -1889,7 +2312,7 @@ function App() {
       <section className="editor-workspace">
         <aside className="editor-sidebar">
           <section className="panel controls-grid">
-            <h2>Nombres de salida</h2>
+            <h2>Salidas y nombres</h2>
             <label htmlFor="name-pattern">Patrón</label>
             <input
               id="name-pattern"
@@ -1905,7 +2328,7 @@ function App() {
           </section>
 
           <section className="panel mode-selector-panel">
-            <h2>Tipo de recorte</h2>
+            <h2>Modos de procesamiento</h2>
             <div className="mode-switch">
               <button
                 type="button"
@@ -1930,6 +2353,22 @@ function App() {
                 disabled={isProcessing}
               >
                 Múltiple
+              </button>
+              <button
+                type="button"
+                className={`btn btn--tab ${activeModeTab === 'instagram' ? 'is-active' : ''}`}
+                onClick={() => setActiveModeTab('instagram')}
+                disabled={isProcessing}
+              >
+                Instagram 4:5
+              </button>
+              <button
+                type="button"
+                className={`btn btn--tab ${activeModeTab === 'images' ? 'is-active' : ''}`}
+                onClick={() => setActiveModeTab('images')}
+                disabled={isProcessing}
+              >
+                Lote imágenes
               </button>
             </div>
           </section>
@@ -2064,6 +2503,80 @@ function App() {
                     </div>
                   </section>
                 </div>
+
+                <div className="mode-page">
+                  <section className="controls-grid mode-page-content">
+                    <h2>Instagram 4:5</h2>
+                    <p className="status-text">
+                      Convierte el video a 1080x1350 manteniendo la proporción original y agregando padding negro.
+                    </p>
+
+                    <label htmlFor="instagram-output-name">Nombre de salida</label>
+                    <input
+                      id="instagram-output-name"
+                      value={instagramOutputName}
+                      onChange={(event) => setInstagramOutputName(event.target.value)}
+                      placeholder="video_ig_4x5.mp4"
+                      disabled={isProcessing}
+                    />
+
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      onClick={handleInstagramFormat}
+                      disabled={!selectedFile || isProcessing}
+                    >
+                      Generar 4:5
+                    </button>
+                  </section>
+                </div>
+
+                <div className="mode-page">
+                  <section className="mode-page-content">
+                    <h2>Lote imágenes 4:5</h2>
+                    <p className="status-text">
+                      Convierte JPG, PNG o WEBP a 1080x1350 usando <code>scale + crop</code> y salida JPG.
+                    </p>
+
+                    <div className="actions-row">
+                      <label htmlFor="image-batch-input" className="file-button btn btn--primary">
+                        Seleccionar imágenes
+                      </label>
+                      <input
+                        id="image-batch-input"
+                        className="visually-hidden-input"
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                        multiple
+                        onChange={handleImageBatchInput}
+                        disabled={isProcessing}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        onClick={handleConvertImageBatch}
+                        disabled={isProcessing || imageBatchFiles.length === 0}
+                      >
+                        Convertir lote
+                      </button>
+                    </div>
+
+                    <p className="status-text">
+                      Seleccionadas: <strong>{imageBatchFiles.length}</strong>
+                    </p>
+
+                    {imageBatchFiles.length > 0 && (
+                      <ul className="image-source-list">
+                        {imageBatchFiles.map((file, index) => (
+                          <li key={`${file.name}_${file.size}_${file.lastModified}_${index}`}>
+                            <span>{file.name}</span>
+                            <span>{formatBytes(file.size)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                </div>
               </div>
             </div>
           </section>
@@ -2084,7 +2597,7 @@ function App() {
                   <li key={entry.id}>
                     <div>
                       <strong>{new Date(entry.createdAt).toLocaleString()}</strong>
-                      <span>Modo: {entry.mode}</span>
+                      <span>Modo: {modeLabel(entry.mode)}</span>
                       <span>Archivo: {entry.sourceFileName}</span>
                       <span>Salidas: {entry.outputCount}</span>
                       <span>Tamaño total: {formatBytes(entry.totalSizeBytes)}</span>
@@ -2256,13 +2769,13 @@ function App() {
             <p className="status-text">{status || 'Esperando acción.'}</p>
 
             <div className="runtime-metrics">
-              <span>Modo: {currentMode === 'idle' ? '-' : currentMode}</span>
+              <span>Modo: {modeLabel(currentMode)}</span>
               <span>Clip actual: {currentClipTotal > 0 ? `${currentClipNumber}/${currentClipTotal}` : '-'}</span>
               <span>ETA total: {formatEta(etaSeconds)}</span>
               <span>Tiempo clip actual: {formatEta(currentClipElapsedSeconds)}</span>
             </div>
 
-            {(currentMode === 'auto' || currentMode === 'multi') && isProcessing && (
+            {(currentMode === 'auto' || currentMode === 'multi' || currentMode === 'images') && isProcessing && (
               <div className="actions-row">
                 <button type="button" className="btn btn--subtle" onClick={handlePauseQueue} disabled={queuePaused || queueCancelRequested}>
                   Pausar cola
@@ -2282,52 +2795,90 @@ function App() {
       <section className="editor-bottom">
         <section className="panel">
           <h2>Descargas</h2>
-          {outputs.length === 0 ? (
-            <p>Aún no hay archivos generados.</p>
-          ) : (
-            <>
-              <div className="downloads-actions">
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  onClick={handleDownloadAll}
-                  disabled={isProcessing || downloadableOutputs.length < 2}
-                >
-                  Descargar todos (.zip)
-                </button>
-              </div>
-              <ul className="download-list">
-                {outputs.map((clip) => (
-                  <li key={clip.id}>
-                    <div>
-                      <strong>{clip.name}</strong>
-                      <span>
-                        {formatSecondsToTime(clip.startSeconds)} - {formatSecondsToTime(clip.startSeconds + clip.durationSeconds)}
-                      </span>
-                      <span>Tamaño: {formatBytes(clip.sizeBytes)}</span>
-                      <span>
-                        Duración real:{' '}
-                        {clip.actualDurationSeconds === null ? '-' : formatSecondsToTime(clip.actualDurationSeconds, true)}
-                      </span>
-                      <span>
-                        Verificación:{' '}
-                        {clip.verifiedPlayable
-                          ? 'OK'
-                          : `Falló${clip.verificationError ? ` (${clip.verificationError})` : ''}`}
-                      </span>
-                    </div>
-                    {clip.verifiedPlayable ? (
-                      <a className="btn btn--primary" href={clip.url} download={clip.name}>
+          <div className="download-group">
+            <h3>Video</h3>
+            {outputs.length === 0 ? (
+              <p>Aún no hay videos generados.</p>
+            ) : (
+              <>
+                <div className="downloads-actions">
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={handleDownloadAll}
+                    disabled={isProcessing || downloadableOutputs.length < 2}
+                  >
+                    Descargar videos (.zip)
+                  </button>
+                </div>
+                <ul className="download-list">
+                  {outputs.map((clip) => (
+                    <li key={clip.id}>
+                      <div>
+                        <strong>{clip.name}</strong>
+                        <span>
+                          {formatSecondsToTime(clip.startSeconds)} - {formatSecondsToTime(clip.startSeconds + clip.durationSeconds)}
+                        </span>
+                        <span>Tamaño: {formatBytes(clip.sizeBytes)}</span>
+                        <span>
+                          Duración real:{' '}
+                          {clip.actualDurationSeconds === null ? '-' : formatSecondsToTime(clip.actualDurationSeconds, true)}
+                        </span>
+                        <span>
+                          Verificación:{' '}
+                          {clip.verifiedPlayable
+                            ? 'OK'
+                            : `Falló${clip.verificationError ? ` (${clip.verificationError})` : ''}`}
+                        </span>
+                      </div>
+                      {clip.verifiedPlayable ? (
+                        <a className="btn btn--primary" href={clip.url} download={clip.name}>
+                          Descargar
+                        </a>
+                      ) : (
+                        <span className="download-disabled">No descargable</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+
+          <div className="download-group">
+            <h3>Imágenes 4:5</h3>
+            {imageOutputs.length === 0 ? (
+              <p>Aún no hay imágenes generadas.</p>
+            ) : (
+              <>
+                <div className="downloads-actions">
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={handleDownloadAllImages}
+                    disabled={isProcessing || imageOutputs.length < 2}
+                  >
+                    Descargar imágenes (.zip)
+                  </button>
+                </div>
+                <ul className="download-list">
+                  {imageOutputs.map((image) => (
+                    <li key={image.id}>
+                      <div>
+                        <strong>{image.name}</strong>
+                        <span>Origen: {image.sourceName}</span>
+                        <span>Tamaño: {formatBytes(image.sizeBytes)}</span>
+                        <span>Formato: JPG 1080x1350 (4:5)</span>
+                      </div>
+                      <a className="btn btn--primary" href={image.url} download={image.name}>
                         Descargar
                       </a>
-                    ) : (
-                      <span className="download-disabled">No descargable</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         </section>
 
         <section className="panel">

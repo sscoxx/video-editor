@@ -25,6 +25,14 @@ export interface CutJob {
   outputPath: string;
   startSeconds: number;
   durationSeconds: number;
+  videoFilter?: string;
+}
+
+export interface ImageJob {
+  inputPath: string;
+  outputPath: string;
+  videoFilter: string;
+  quality?: number;
 }
 
 export class BrowserFFmpeg {
@@ -76,19 +84,38 @@ export class BrowserFFmpeg {
   }
 
   public async transcodeClip(job: CutJob): Promise<Uint8Array> {
-    const exitCode = await this.ffmpeg.exec([
+    const args = [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
       '-ss',
       formatSecondsForFfmpeg(job.startSeconds),
       '-i',
-      job.inputPath,
-      '-t',
-      formatSecondsForFfmpeg(job.durationSeconds),
+      job.inputPath
+    ];
+
+    if (job.durationSeconds > 0) {
+      args.push('-t', formatSecondsForFfmpeg(job.durationSeconds));
+    }
+
+    if (job.videoFilter) {
+      args.push('-vf', job.videoFilter);
+    }
+
+    args.push(
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a?',
       '-c:v',
       'libx264',
       '-preset',
       'veryfast',
       '-crf',
       '23',
+      '-pix_fmt',
+      'yuv420p',
       '-c:a',
       'aac',
       '-b:a',
@@ -96,20 +123,39 @@ export class BrowserFFmpeg {
       '-movflags',
       '+faststart',
       job.outputPath
+    );
+
+    const exitCode = await this.ffmpeg.exec(args);
+
+    if (exitCode !== 0) {
+      throw new Error(`ffmpeg finalizó con código ${exitCode} al recodificar video.`);
+    }
+
+    return this.readOutputFile(job.outputPath);
+  }
+
+  public async transcodeImage(job: ImageJob): Promise<Uint8Array> {
+    const exitCode = await this.ffmpeg.exec([
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-i',
+      job.inputPath,
+      '-vf',
+      job.videoFilter,
+      '-frames:v',
+      '1',
+      '-q:v',
+      String(job.quality ?? 2),
+      job.outputPath
     ]);
 
     if (exitCode !== 0) {
-      throw new Error(`ffmpeg finalizó con código ${exitCode}.`);
+      throw new Error(`ffmpeg finalizó con código ${exitCode} al convertir imagen.`);
     }
 
-    const rawData = await this.ffmpeg.readFile(job.outputPath);
-    await this.deleteFile(job.outputPath);
-
-    if (typeof rawData === 'string') {
-      return new TextEncoder().encode(rawData);
-    }
-
-    return rawData;
+    return this.readOutputFile(job.outputPath);
   }
 
   public async deleteFile(path: string): Promise<void> {
@@ -123,6 +169,17 @@ export class BrowserFFmpeg {
   public terminate(): void {
     this.ffmpeg.terminate();
     this.loaded = false;
+  }
+
+  private async readOutputFile(path: string): Promise<Uint8Array> {
+    const rawData = await this.ffmpeg.readFile(path);
+    await this.deleteFile(path);
+
+    if (typeof rawData === 'string') {
+      return new TextEncoder().encode(rawData);
+    }
+
+    return rawData;
   }
 
   private extractExtension(fileName: string): string {

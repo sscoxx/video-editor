@@ -1,6 +1,6 @@
-# Mini Video Cutter (React + Vite + ffmpeg.wasm)
+# FormatFlow Studio (React + Vite + ffmpeg.wasm)
 
-Editor web local para recortar videos MP4, auto-dividirlos y generar cortes múltiples por rangos inicio/fin, **siempre recodificando** (sin stream copy).
+Editor web local para recortar videos MP4, auto-dividirlos, generar cortes multiples por rangos inicio/fin, reformatear videos a Instagram 4:5 y convertir lotes de imagenes, **siempre recodificando** (sin stream copy).
 
 ## Stack
 
@@ -9,9 +9,9 @@ Editor web local para recortar videos MP4, auto-dividirlos y generar cortes múl
 - `JSZip` para descarga masiva en `.zip`
 - Core local de ffmpeg servido desde `public/ffmpeg`
 
-## Reglas de codificación aplicadas
+## Reglas de codificacion aplicadas
 
-En todos los recortes se usa este perfil (re-codificación obligatoria):
+En los procesos de video se usa este perfil (recodificacion obligatoria):
 
 ```bash
 -ss START -i input.mp4 -t DURATION \
@@ -83,9 +83,10 @@ App disponible en:
 5. Definir `Start time` y `Duration` para recorte simple.
 6. O definir `Clip length` y usar **Auto-dividir**.
 7. O definir varios cortes independientes (`inicio` + `fin`) en **Cortes múltiples**.
-8. Reordenar cortes múltiples con **drag & drop**.
-9. Lanzar proceso y, en colas largas (auto/multi), usar **Pausar / Reanudar / Cancelar**.
-10. Descargar clips individuales o **Descargar todos (.zip)**.
+8. O usar **Lote imágenes 4:5** para cargar múltiples `.jpg/.jpeg/.png/.webp` y convertirlos a `.jpg` en `1080x1350` (`scale + crop`).
+9. Reordenar cortes múltiples con **drag & drop**.
+10. Lanzar proceso y, en colas largas (auto/multi/imágenes), usar **Pausar / Reanudar / Cancelar**.
+11. Descargar salidas individuales o por lote en `.zip`.
 
 ## Funciones avanzadas
 
@@ -94,6 +95,7 @@ App disponible en:
 - Inicialización automática del motor ffmpeg al cargar video (sin botón manual).
 - Reordenamiento de cortes múltiples por drag & drop.
 - Cola de trabajos con pausa/reanudar/cancelar.
+- Conversión en lote de imágenes a `1080x1350` con `force_original_aspect_ratio=increase` + `crop`.
 - ETA estimada y métricas de ejecución en tiempo real.
 - Métricas por salida antes de descargar:
   - tamaño
